@@ -1,11 +1,9 @@
 package nl.kadaster.ozon.mqclient;
 
 import com.rabbitmq.jms.admin.RMQConnectionFactory;
-import nl.kadaster.ozon.queues.domain.QueueRequest;
-import nl.kadaster.ozon.queues.domain.audit.AuditRequest;
-import nl.kadaster.ozon.queues.domain.constants.Bewaartermijn;
+import com.rabbitmq.jms.client.RMQSession;
 import nl.kadaster.ozon.queues.domain.constants.ProcesType;
-import nl.kadaster.ozon.queues.domain.download.DownloadRequest;
+import nl.kadaster.ozon.queues.domain.request.QueueRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -18,12 +16,14 @@ import org.springframework.jms.listener.MessageListenerContainer;
 import org.springframework.jms.support.converter.MappingJackson2MessageConverter;
 import org.springframework.jms.support.converter.MessageConverter;
 import org.springframework.jms.support.converter.MessageType;
+import org.springframework.jms.support.destination.DynamicDestinationResolver;
 
 import javax.jms.ConnectionFactory;
+import javax.jms.Destination;
 import javax.jms.JMSException;
-import java.net.MalformedURLException;
-import java.net.URL;
+import javax.jms.Session;
 import java.util.Arrays;
+import java.util.Map;
 
 @SpringBootApplication
 public class MqClientApplication {
@@ -33,7 +33,7 @@ public class MqClientApplication {
 
     @Bean
     public ConnectionFactory connectionFactory() throws JMSException {
-        RMQConnectionFactory connectionFactory = new RMQConnectionFactory();
+        var connectionFactory = new RMQConnectionFactory();
         connectionFactory.setUris(Arrays.asList("amqp://localhost:5672"));
         connectionFactory.setUsername("guest");
         connectionFactory.setPassword("guest");
@@ -42,37 +42,47 @@ public class MqClientApplication {
 
     @Bean
     public JmsListenerContainerFactory<? extends MessageListenerContainer> myFactory(ConnectionFactory connectionFactory, DefaultJmsListenerContainerFactoryConfigurer configurer) {
-        DefaultJmsListenerContainerFactory factory = new DefaultJmsListenerContainerFactory();
+        var factory = new DefaultJmsListenerContainerFactory();
         configurer.configure(factory, connectionFactory);
         return factory;
     }
 
     @Bean
     public JmsTemplate jmsTemplate(ConnectionFactory connectionFactory) {
-        JmsTemplate jmsTemplate = new JmsTemplate();
+        var jmsTemplate = new JmsTemplate();
         jmsTemplate.setSessionTransacted(true);
         jmsTemplate.setConnectionFactory(connectionFactory);
-        jmsTemplate.setMessageConverter(this.jacksonJmsMessageConverter());
+        jmsTemplate.setMessageConverter(jacksonJmsMessageConverter());
+        jmsTemplate.setDestinationResolver(destinationResolver());
         return jmsTemplate;
     }
 
-    @Bean
     public MessageConverter jacksonJmsMessageConverter() {
-        MappingJackson2MessageConverter converter = new MappingJackson2MessageConverter();
+        var converter = new MappingJackson2MessageConverter();
         converter.setTargetType(MessageType.BYTES);
         converter.setTypeIdPropertyName("_type");
         return converter;
     }
 
-    public void sendMessage() throws MalformedURLException {
-       var downloadRequest= new DownloadRequest("8119a196-22d9-4527-9f91-6834c52db747", null, ProcesType.GEOVALIDATIE, new URL("http://localhost:1234/zipservice"), Bewaartermijn.GEEN, "782934793247");
-//        jmsTemplate.convertAndSend("AUDIT_LOG_REQ", new AuditRequest("123", "download", ProcesType.REGISTRATIE, "sta[", true));
-        jmsTemplate.convertAndSend("RODAQ_OWN.ROD_VAL_GEOMETRY_REQ", new QueueRequest("8119a196-22d9-4527-9f91-6834c52db747", null, ProcesType.GEOVALIDATIE));
-//        jmsTemplate.convertAndSend("RODAQ_OWN.ROD_DOWNLOAD_REQ", downloadRequest);
-//        jmsTemplate.convertAndSend("RODAQ_OWN.ROD_OW_SCHEMA_REQ", new QueueRequest("bbffe28e-8db8-49bb-801f-b1ba1d8abb56", "2021.07", ProcesType.REGISTRATIE));
+    @Bean
+    public DynamicDestinationResolver destinationResolver() {
+        return new DynamicDestinationResolver() {
+            public Destination resolveDestinationName(Session session, String destinationName, boolean pubSubDomain) throws JMSException {
+                if (session instanceof RMQSession) {
+                    ((RMQSession) session).setQueueDeclareArguments(Map.of("x-max-priority", 10));
+                }
+
+                return super.resolveDestinationName(session, destinationName, pubSubDomain);
+            }
+        };
     }
 
-    public static void main(String[] args) throws MalformedURLException {
+    public void sendMessage() {
+        var queueRequest = new QueueRequest("22444db1-ca5f-4748-b068-6e17f324120b", null, ProcesType.ONTWERPPROEFREGISTRATIE, false);
+        jmsTemplate.convertAndSend("RODAQ_OWN.ROD_VALIDATOR_REQ", queueRequest);
+    }
+
+    public static void main(String[] args) {
         var run = SpringApplication.run(MqClientApplication.class, args);
         run.getBean(MqClientApplication.class).sendMessage();
     }
